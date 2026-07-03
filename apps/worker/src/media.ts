@@ -82,6 +82,70 @@ export async function renderPlaceholderVideoBuffer(opts: {
   }
 }
 
+/** 抽取视频尾帧（长镜头续接：作为下一段的首帧）。失败返回 null，调用方降级为纯话术续接 */
+export async function extractLastFrameBuffer(videoPath: string): Promise<Buffer | null> {
+  if (!hasFfmpeg()) return null;
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'sf-frame-'));
+  const out = path.join(tmp, 'last.jpg');
+  try {
+    try {
+      await runFfmpeg(['-sseof', '-0.2', '-i', videoPath, '-frames:v', '1', '-q:v', '2', out]);
+    } catch {
+      // 极短视频 -sseof 可能取不到帧 → 退化为取首帧
+      await runFfmpeg(['-i', videoPath, '-frames:v', '1', '-q:v', '2', out]);
+    }
+    return await fs.readFile(out);
+  } catch (e) {
+    console.warn('extractLastFrameBuffer failed:', e);
+    return null;
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+}
+
+/**
+ * 多段 mp4 拼接为单条视频（长镜头续接的收尾）。
+ * 统一归一到 1080x1920/24fps 再 concat；任一段无音轨（mock lavfi 无声）导致
+ * 带音轨拼接失败时，降级 v=1:a=0 重试（与 composeVertical 的降级风格一致）。
+ */
+export async function concatVideosToBuffer(filePaths: string[]): Promise<Buffer> {
+  if (!hasFfmpeg()) throw new Error('环境缺少 ffmpeg，无法拼接续接段');
+  if (filePaths.length === 0) throw new Error('没有可拼接的视频段');
+  if (filePaths.length === 1) return fs.readFile(filePaths[0]);
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'sf-concat-'));
+  const out = path.join(tmp, 'merged.mp4');
+  const inputs = filePaths.flatMap((f) => ['-i', f]);
+  const buildFilter = (withAudio: boolean) => {
+    const chains = filePaths.map(
+      (_, i) =>
+        `[${i}:v]scale=1080:1920:force_original_aspect_ratio=decrease,` +
+        `pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps=24[v${i}]`,
+    );
+    const pairs = filePaths.map((_, i) => (withAudio ? `[v${i}][${i}:a]` : `[v${i}]`)).join('');
+    const concat = `${pairs}concat=n=${filePaths.length}:v=1:a=${withAudio ? 1 : 0}${
+      withAudio ? '[outv][outa]' : '[outv]'
+    }`;
+    return [...chains, concat].join(';');
+  };
+  try {
+    try {
+      await runFfmpeg([
+        ...inputs, '-filter_complex', buildFilter(true),
+        '-map', '[outv]', '-map', '[outa]', '-c:a', 'aac',
+        '-pix_fmt', 'yuv420p', '-movflags', '+faststart', out,
+      ]);
+    } catch {
+      await runFfmpeg([
+        ...inputs, '-filter_complex', buildFilter(false),
+        '-map', '[outv]', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', out,
+      ]);
+    }
+    return await fs.readFile(out);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+}
+
 export interface ComposeSegment {
   filePath: string;
   dialogue: string;

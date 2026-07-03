@@ -7,6 +7,7 @@ import {
   type ModelAdapter,
   type RunContext,
 } from '@stageforge/core';
+import { arkFetch, arkKey } from '../../ark';
 import { clampDuration, defineMockVideoAdapter, produceMockVideo } from '../../mock';
 
 /**
@@ -44,12 +45,6 @@ const SEEDANCE_META: { id: string; displayName: string; hue: number; caps: impor
 
 const SEEDANCE_COST = { unit: 'per_second', price: 0.682, currency: 'USD' } as const;
 
-const ARK_BASE = process.env.ARK_BASE_URL ?? 'https://ark.cn-beijing.volces.com/api/v3';
-
-function arkKey(): string | undefined {
-  return process.env.ARK_API_KEY || undefined;
-}
-
 interface ArkHandleData {
   kind: 'ark';
   durationSec: number;
@@ -57,22 +52,6 @@ interface ArkHandleData {
 interface MockHandleData {
   kind: 'mock';
   result: { output: AssetOutput; usage: import('@stageforge/core').Usage };
-}
-
-async function arkFetch(path: string, init?: RequestInit): Promise<Record<string, unknown>> {
-  const res = await fetch(`${ARK_BASE}${path}`, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${arkKey()}`,
-      'Content-Type': 'application/json',
-      ...init?.headers,
-    },
-  });
-  const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-  if (!res.ok) {
-    throw new Error(`Ark API ${res.status}: ${JSON.stringify(json).slice(0, 300)}`);
-  }
-  return json;
 }
 
 export const seedanceI2V: ModelAdapter<I2VInput, AssetOutput> = {
@@ -98,20 +77,40 @@ export const seedanceI2V: ModelAdapter<I2VInput, AssetOutput> = {
       return { externalId: `mock:${ctx.jobId}`, data };
     }
 
-    // 角色一致性：一致性话术已在流水线注入 prompt；关键帧走图生视频
     const content: Record<string, unknown>[] = [
       {
         type: 'text',
         text: `${input.prompt} --resolution ${input.resolution} --ratio ${input.aspectRatio} --duration ${durationSec}`,
       },
     ];
+    // 关键帧作首帧（图生视频）；role 字段形态以 Ark 最新官方文档为准（uncertain，无 key 未实测）
     if (input.keyframeAssetId) {
       const url = await ctx.assetPublicUrl(input.keyframeAssetId);
       if (url) {
-        content.push({ type: 'image_url', image_url: { url } });
+        content.push({ type: 'image_url', image_url: { url }, role: 'first_frame' });
       } else {
         ctx.log('seedance: local 存储无公网 URL，关键帧未随请求发送（建议生产切 S3/R2）');
       }
+    }
+    // 全能参考：角色定妆图 + 场景参考图一并作为参考图传入（多图锁一致性）
+    // ⚠️ Ark 多图参考的字段形态（role/数量上限）以官方文档为准（uncertain，无 key 未实测）
+    const refImages: { url: string; label: string }[] = [];
+    for (const r of input.characterRefs ?? []) {
+      if (!r.refAssetId) continue;
+      const url = await ctx.assetPublicUrl(r.refAssetId);
+      if (url) refImages.push({ url, label: `角色 ${r.name}` });
+      else ctx.log(`seedance: 角色 ${r.name} 定妆图无公网 URL，未随请求发送（local 存储，生产切 S3/R2）`);
+    }
+    if (input.sceneRef?.refAssetId) {
+      const url = await ctx.assetPublicUrl(input.sceneRef.refAssetId);
+      if (url) refImages.push({ url, label: `场景 ${input.sceneRef.title}` });
+      else ctx.log(`seedance: 场景 ${input.sceneRef.title} 参考图无公网 URL，未随请求发送`);
+    }
+    for (const ref of refImages) {
+      content.push({ type: 'image_url', image_url: { url: ref.url }, role: 'reference_image' });
+    }
+    if (refImages.length) {
+      ctx.log(`seedance: 携带参考图 ×${refImages.length}（${refImages.map((r) => r.label).join('、')}）`);
     }
 
     const task = await arkFetch('/contents/generations/tasks', {

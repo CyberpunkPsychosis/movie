@@ -2,6 +2,7 @@ import {
   SHOT_STAGES,
   computeCostCents,
   type AssetOutput,
+  type I2VInput,
   type Storyboard,
   type StoryboardOutput,
   type Usage,
@@ -9,8 +10,7 @@ import {
 import { getAdapter } from '@stageforge/adapters';
 import { prisma, type GenerationJob, Prisma } from '@stageforge/db';
 import { buildRunContext } from './context';
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+import { needsSegmentation, runAdapterOnce, runSegmentedVideo } from './longshot';
 
 /**
  * 生成任务处理器 —— 对所有能力/所有模型只有这一条路径：
@@ -35,17 +35,14 @@ export async function processGeneration(jobId: string): Promise<void> {
     const adapter = getAdapter(job.adapterId);
     const input = job.input as unknown;
 
-    const handle = await adapter.submit(input, ctx);
-    let status = await adapter.poll(handle, ctx);
-    while (status.state === 'running') {
-      await sleep(2000);
-      status = await adapter.poll(handle, ctx);
-    }
-    if (status.state === 'failed') throw new Error(status.error);
+    // 长镜头拆段续接（F3）：视频时长超该模型单段上限时走拆段编排，其余一律单次执行
+    const isVideo = job.capability === 'video.i2v' || job.capability === 'video.t2v';
+    const { output, usage } =
+      isVideo && needsSegmentation(adapter.caps, input)
+        ? await runSegmentedVideo(adapter, input as I2VInput, ctx)
+        : await runAdapterOnce(adapter, input, ctx);
 
-    const usage: Usage = status.usage ?? {};
     const cost = computeCostCents(adapter.cost, usage);
-    const output = status.output;
 
     if (job.capability === 'text.storyboard') {
       await materializeStoryboard(job, (output as StoryboardOutput).storyboard);
@@ -63,6 +60,15 @@ export async function processGeneration(jobId: string): Promise<void> {
       if (characterId) {
         await prisma.character.update({
           where: { id: characterId },
+          data: { refAssetId: output.asset.assetId },
+        });
+      }
+    } else if (job.capability === 'image.t2i' && !job.shotId && isAssetOutput(output)) {
+      // 场景参考图生成（无 shotId 的 t2i）：回写 Scene.refAssetId；镜头级 t2i 必有 shotId，走下方变体分支
+      const sceneId = (job.input as { sceneId?: string }).sceneId;
+      if (sceneId) {
+        await prisma.scene.update({
+          where: { id: sceneId },
           data: { refAssetId: output.asset.assetId },
         });
       }

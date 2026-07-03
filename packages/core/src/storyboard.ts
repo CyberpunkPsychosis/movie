@@ -10,7 +10,7 @@ export const shotSchema = z.object({
   shotType: z.string().default('中景'), // 景别：特写/近景/中景/全景
   emotion: z.string().default('平静'),
   cameraMove: z.string().default('固定'),
-  durationSec: z.number().min(1).max(15).default(5),
+  durationSec: z.number().min(1).max(60).default(5),
   characters: z.array(z.string()).default([]),
 });
 
@@ -46,7 +46,7 @@ export function buildStoryboardPrompt(script: string, characterNames: string[] =
     '',
     '硬性要求：',
     '1. 每一集的第一个镜头必须是 2 秒内抓住观众的强钩子（冲突/悬念/反转直给）。',
-    '2. 每个镜头 durationSec 在 3-15 秒之间（视频模型单段上限 15 秒）。',
+    '2. 每个镜头 durationSec 常规 3-15 秒；确需长镜头可到 60 秒（系统自动拆段续接生成）。',
     '3. visualPrompt 用于图像/视频生成：写清人物、动作、场景、光线、镜头语言，不要写台词。',
     '4. dialogue 是该镜头的台词/旁白，没有就留空字符串。',
     '5. 竖屏 9:16 构图思维：人物为主，特写和近景占比高。',

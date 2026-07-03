@@ -116,6 +116,15 @@ export function StageRail({
                 {effective.notes && (
                   <p className="mt-1 text-[10px] leading-4 text-slate-500">{effective.notes}</p>
                 )}
+                {capability.startsWith('video.') &&
+                  effective.caps.maxDurationSec != null &&
+                  shot.durationSec > effective.caps.maxDurationSec && (
+                    <p className="mt-1 text-[10px] leading-4 text-amber-400">
+                      {shot.durationSec}s 超单段上限 {effective.caps.maxDurationSec}s，将拆{' '}
+                      {Math.ceil(shot.durationSec / effective.caps.maxDurationSec)}{' '}
+                      段续接（尾帧→首帧，自动拼接为单变体）
+                    </p>
+                  )}
               </>
             )}
 

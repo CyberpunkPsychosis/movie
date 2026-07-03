@@ -4,4 +4,5 @@ export * from './storage';
 export * from './queue';
 export * from './cost';
 export * from './storyboard';
+export * from './segments';
 export * from './placeholders';

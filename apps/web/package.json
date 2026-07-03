@@ -13,6 +13,7 @@
     "@stageforge/core": "*",
     "@stageforge/db": "*",
     "@tanstack/react-query": "^5.62.0",
+    "@xyflow/react": "^12.11.1",
     "bcryptjs": "^2.4.3",
     "dotenv": "^16.4.5",
     "next": "^14.2.15",

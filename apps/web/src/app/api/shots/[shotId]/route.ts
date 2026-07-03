@@ -13,6 +13,8 @@ const patchSchema = z.object({
   emotion: z.string().max(20).optional(),
   cameraMove: z.string().max(20).optional(),
   durationSec: z.number().min(1).max(60).optional(),
+  /** 引用的角色 id（整组替换语义，画布连线/删线用） */
+  characterIds: z.array(z.string().min(1)).max(20).optional(),
 });
 
 export async function PATCH(req: NextRequest, { params }: { params: { shotId: string } }) {

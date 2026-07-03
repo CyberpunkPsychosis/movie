@@ -7,6 +7,7 @@ import { api } from '@/lib/api';
 import { useWorkbenchStore } from '@/lib/store';
 import { StageRail } from '@/components/stage-rail';
 import { VariantPreview, VariantStrip } from '@/components/variant-strip';
+import { EpisodeCanvas } from '@/components/canvas/episode-canvas';
 import {
   CAPABILITY_LABEL,
   TARGET_LANGS,
@@ -100,16 +101,18 @@ function ShotEditor({ projectId, shot }: { projectId: string; shot: ApiShot }) {
   const queryClient = useQueryClient();
   const [dialogue, setDialogue] = useState(shot.dialogue);
   const [visualPrompt, setVisualPrompt] = useState(shot.visualPrompt);
+  const [durationSec, setDurationSec] = useState(shot.durationSec);
   useEffect(() => {
     setDialogue(shot.dialogue);
     setVisualPrompt(shot.visualPrompt);
-  }, [shot.id, shot.dialogue, shot.visualPrompt]);
+    setDurationSec(shot.durationSec);
+  }, [shot.id, shot.dialogue, shot.visualPrompt, shot.durationSec]);
 
   const save = useMutation({
     mutationFn: () =>
       api(`/api/shots/${shot.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ dialogue, visualPrompt }),
+        body: JSON.stringify({ dialogue, visualPrompt, durationSec }),
       }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['project', projectId] }),
   });
@@ -120,7 +123,8 @@ function ShotEditor({ projectId, shot }: { projectId: string; shot: ApiShot }) {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['project', projectId] }),
   });
 
-  const dirty = dialogue !== shot.dialogue || visualPrompt !== shot.visualPrompt;
+  const dirty =
+    dialogue !== shot.dialogue || visualPrompt !== shot.visualPrompt || durationSec !== shot.durationSec;
 
   return (
     <div className="space-y-3">
@@ -140,7 +144,18 @@ function ShotEditor({ projectId, shot }: { projectId: string; shot: ApiShot }) {
         <span>{shot.shotType}</span>
         <span>{shot.emotion}</span>
         <span>{shot.cameraMove}</span>
-        <span>{shot.durationSec}s</span>
+        <span className="flex items-center gap-1" title="超过模型单段上限时自动拆段续接（尾帧→首帧）">
+          <input
+            type="number"
+            min={1}
+            max={60}
+            step={1}
+            className="input w-14 px-1.5 py-0.5 text-xs"
+            value={durationSec}
+            onChange={(e) => setDurationSec(Math.max(1, Math.min(60, Number(e.target.value) || 1)))}
+          />
+          s
+        </span>
         {shot.characterIds.length >= 2 && (
           <button
             className="btn-ghost text-xs"
@@ -321,7 +336,16 @@ function EpisodeTree({
           {translate.isError && <p className="text-[10px] text-red-400">{translate.error.message}</p>}
           {ep.scenes.map((scene) => (
             <div key={scene.id} className="mt-3">
-              <div className="micro-label">
+              <div className="micro-label flex items-center gap-1.5">
+                {scene.refAssetId && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={`/api/assets/${scene.refAssetId}`}
+                    alt=""
+                    className="h-4 w-4 rounded-sm object-cover"
+                    title="场景参考图（生成时自动注入）"
+                  />
+                )}
                 {scene.title}
                 {scene.location ? ` · ${scene.location}` : ''}
               </div>
@@ -367,6 +391,9 @@ export function Workbench({ projectId }: { projectId: string }) {
     refetchInterval: 5000,
   });
   const { selectedShotId, setSelectedShot } = useWorkbenchStore();
+  // 画布 = 主视图（对标小云雀）；列表 = 兜底视图，体验不达标时用户可随时切回
+  const [view, setView] = useState<'canvas' | 'list'>('canvas');
+  const [canvasEpisodeId, setCanvasEpisodeId] = useState<string | null>(null);
 
   const project = projectData?.project;
   const adapters = registryData?.adapters ?? [];
@@ -403,6 +430,22 @@ export function Workbench({ projectId }: { projectId: string }) {
         <span className="font-display text-sm text-slate-300">{project.name}</span>
         <nav className="ml-4 flex gap-2 text-xs">
           <span className="badge bg-blue-900/50 text-blue-300">工作台</span>
+          <span className="flex overflow-hidden rounded-full border border-slate-700 text-[10px]">
+            <button
+              className={`px-2 py-0.5 ${view === 'canvas' ? 'bg-blue-900/60 text-blue-200' : 'text-slate-400 hover:text-white'}`}
+              onClick={() => setView('canvas')}
+              title="画布视图：角色/场景/镜头节点，拖线即引用"
+            >
+              画布
+            </button>
+            <button
+              className={`px-2 py-0.5 ${view === 'list' ? 'bg-blue-900/60 text-blue-200' : 'text-slate-400 hover:text-white'}`}
+              onClick={() => setView('list')}
+              title="列表视图：集/场/镜树 + 监视器"
+            >
+              列表
+            </button>
+          </span>
           <Link className="badge bg-slate-800 text-slate-400 hover:text-white" href={`/projects/${projectId}/storyboard`}>
             分镜表
           </Link>
@@ -434,6 +477,82 @@ export function Workbench({ projectId }: { projectId: string }) {
         </div>
       </header>
 
+      {view === 'canvas' ? (
+        <div className="flex min-h-0 flex-1">
+          {/* 画布：角色/场景/镜头节点，拖线即引用 */}
+          <section className="relative min-w-0 flex-1">
+            {(() => {
+              const canvasEpisode =
+                project.episodes.find((e) => e.id === canvasEpisodeId) ?? project.episodes[0] ?? null;
+              if (!canvasEpisode) {
+                return (
+                  <p className="p-6 text-sm text-slate-500">
+                    还没有分镜。去「分镜表」页粘贴剧本生成，或新建项目时直接带剧本。
+                  </p>
+                );
+              }
+              return (
+                <>
+                  {project.episodes.length > 1 && (
+                    <div className="absolute left-3 top-3 z-10">
+                      <select
+                        className="input w-auto px-2 py-1 text-xs"
+                        value={canvasEpisode.id}
+                        onChange={(e) => setCanvasEpisodeId(e.target.value)}
+                      >
+                        {project.episodes.map((ep) => (
+                          <option key={ep.id} value={ep.id}>
+                            {ep.title}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  <EpisodeCanvas
+                    projectId={projectId}
+                    project={project}
+                    episode={canvasEpisode}
+                    adapters={adapters}
+                    modelConfigs={project.modelConfigs}
+                    selectedShotId={selectedShot?.id ?? null}
+                    onSelectShot={setSelectedShot}
+                  />
+                </>
+              );
+            })()}
+          </section>
+          {/* 右抽屉：点选镜头节点 → 细节编辑（复用 ShotEditor + Stage Rail） */}
+          <aside className="w-96 shrink-0 overflow-y-auto border-l border-slate-800 p-3">
+            {selectedShot ? (
+              <div className="space-y-4">
+                <h3 className="micro-label">
+                  SHOT {String(selectedShot.index + 1).padStart(2, '0')} <span className="text-blue-500">·</span> 细节
+                </h3>
+                <ShotEditor projectId={projectId} shot={selectedShot} />
+                <ConsistencyChecker projectId={projectId} shot={selectedShot} />
+                <div className="space-y-3">
+                  {['image.t2i', 'video.i2v', 'audio.tts', 'audio.lipsync'].map((cap) => (
+                    <VariantStrip key={cap} projectId={projectId} capability={cap} variants={selectedShot.variants} />
+                  ))}
+                </div>
+                <div className="border-t border-slate-800 pt-3">
+                  <h3 className="micro-label mb-3">
+                    Stage Rail <span className="text-blue-500">·</span> 环节 × 模型
+                  </h3>
+                  <StageRail
+                    projectId={projectId}
+                    shot={selectedShot}
+                    adapters={adapters}
+                    modelConfigs={project.modelConfigs}
+                  />
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs text-slate-500">点选画布上的镜头节点，在这里编辑细节</p>
+            )}
+          </aside>
+        </div>
+      ) : (
       <div className="flex min-h-0 flex-1">
         {/* 左：集/场/镜 树 */}
         <aside className="w-64 shrink-0 overflow-y-auto border-r border-slate-800 p-3">
@@ -540,6 +659,7 @@ export function Workbench({ projectId }: { projectId: string }) {
           )}
         </aside>
       </div>
+      )}
     </main>
   );
 }

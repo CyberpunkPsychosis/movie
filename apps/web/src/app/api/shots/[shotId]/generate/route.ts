@@ -5,7 +5,7 @@ import { GENERATION_QUEUE, getQueue, type Capability } from '@stageforge/core';
 import { getAdapter } from '@stageforge/adapters';
 import { requireUser } from '@/lib/auth';
 import { getShotWithAccess, handleError } from '@/lib/server';
-import { buildStageInput, resolveAdapterId } from '@/lib/pipeline';
+import { buildStageInput, estimateStageCost, resolveAdapterId } from '@/lib/pipeline';
 
 export const dynamic = 'force-dynamic';
 
@@ -38,7 +38,7 @@ export async function POST(req: NextRequest, { params }: { params: { shotId: str
       body.adapterId ?? (await resolveAdapterId(project.id, capability, shot.stages));
     const adapter = getAdapter(adapterId);
     const input = await buildStageInput(capability, shot);
-    const estimated = adapter.estimateCost(input);
+    const estimated = estimateStageCost(adapter, capability, input);
 
     const job = await prisma.generationJob.create({
       data: {

@@ -118,6 +118,8 @@ export interface ApiScene {
   index: number;
   title: string;
   location: string;
+  refAssetId: string | null;
+  consistencyNote: string;
   shots: ApiShot[];
 }
 
@@ -128,6 +130,8 @@ export interface ApiEpisode {
   status: string;
   finalAssetId: string | null;
   musicAssetId: string | null;
+  /** 画布节点坐标 {nodeId: {x, y}}，null = 未布局过（前端自动排布） */
+  canvasLayout: Record<string, { x: number; y: number }> | null;
   scenes: ApiScene[];
 }
 

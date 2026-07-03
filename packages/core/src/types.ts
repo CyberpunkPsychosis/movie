@@ -89,6 +89,16 @@ export interface CharacterRef {
   voiceId?: string | null;
 }
 
+/** 场景参考（模型无关）：同场景镜头生成关键帧/视频时自动注入，锁场景不跳景 */
+export interface SceneRef {
+  sceneId: string;
+  title: string;
+  /** 场景参考图资产（空镜/环境图） */
+  refAssetId?: string | null;
+  /** 场景一致性话术，注入支持参考图的适配器 */
+  consistencyNote?: string;
+}
+
 export interface RunContext {
   jobId: string;
   projectId: string;
@@ -183,6 +193,7 @@ export interface T2IInput {
   prompt: string;
   aspectRatio: string;
   characterRefs?: CharacterRef[];
+  sceneRef?: SceneRef;
 }
 
 export interface I2VInput {
@@ -193,6 +204,7 @@ export interface I2VInput {
   keyframeAssetId?: string | null;
   dialogue?: string;
   characterRefs?: CharacterRef[];
+  sceneRef?: SceneRef;
 }
 
 export interface TTSInput {

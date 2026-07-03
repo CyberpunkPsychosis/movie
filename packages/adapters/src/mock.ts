@@ -5,6 +5,7 @@ import {
   type AdapterCaps,
   type AssetOutput,
   type Capability,
+  type CharacterRef,
   type CostModel,
   type Credits,
   type I2VInput,
@@ -12,6 +13,7 @@ import {
   type ModelAdapter,
   type MusicInput,
   type RunContext,
+  type SceneRef,
   type T2IInput,
   type TTSInput,
   type Usage,
@@ -61,6 +63,18 @@ export function defineMockAdapter<I, O>(
   };
 }
 
+/**
+ * 参考图摘要：只统计**实际带图**（有 assetId）的角色/场景参考。
+ * mock 占位物把它烧进画面 → 无 key 时链路是否把图带到了模型侧，肉眼可对账。
+ */
+export function refSummary(input: { characterRefs?: CharacterRef[]; sceneRef?: SceneRef }): string {
+  const named = [
+    ...(input.characterRefs ?? []).filter((r) => r.refAssetId).map((r) => `@${r.name}`),
+    ...(input.sceneRef?.refAssetId ? [`场景:${input.sceneRef.title}`] : []),
+  ];
+  return named.length ? `参考图×${named.length}（${named.join('、')}）` : '';
+}
+
 /** 视频占位产出（mock 路径与真实适配器的无 key 降级共用） */
 export async function produceMockVideo(
   meta: { id: string; displayName: string; caps: AdapterCaps; hue: number },
@@ -68,9 +82,16 @@ export async function produceMockVideo(
   ctx: RunContext,
 ): Promise<{ output: AssetOutput; usage: Usage }> {
   const durationSec = clampDuration(input.durationSec, meta.caps.maxDurationSec);
-  const refNote = input.characterRefs?.length
-    ? `锁角色: ${input.characterRefs.map((r) => r.name).join('/')}`
-    : '';
+  const refs = refSummary(input);
+  const refNote = [
+    input.keyframeAssetId ? '首帧' : '',
+    refs,
+    !refs && input.characterRefs?.length
+      ? `锁角色: ${input.characterRefs.map((r) => r.name).join('/')}`
+      : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
   const rendered = await ctx.renderPlaceholderVideo({
     durationSec,
     title: input.prompt.slice(0, 30),
@@ -108,6 +129,30 @@ export function defineMockVideoAdapter(
   );
 }
 
+/** 图像占位产出（mock 路径与真实适配器的无 key 降级共用，对称 produceMockVideo） */
+export async function produceMockImage(
+  meta: { id: string; displayName: string; hue: number },
+  input: T2IInput,
+  ctx: RunContext,
+): Promise<{ output: AssetOutput; usage: Usage }> {
+  const refs = refSummary(input);
+  const refNote =
+    refs ||
+    (input.characterRefs?.length ? `@${input.characterRefs.map((r) => r.name).join(' @')}` : '');
+  const asset = await ctx.saveAsset({
+    kind: 'image',
+    data: svgPlaceholder({
+      title: input.prompt.slice(0, 48),
+      subtitle: `${meta.displayName} ${refNote}`,
+      badge: meta.id,
+      hue: meta.hue,
+    }),
+    contentType: 'image/svg+xml',
+    ext: 'svg',
+  });
+  return { output: { asset }, usage: { images: 1 } };
+}
+
 /** 图像类 mock：SVG 占位图 */
 export function defineMockImageAdapter(
   meta: AdapterMeta & { hue: number },
@@ -116,23 +161,7 @@ export function defineMockImageAdapter(
   return defineMockAdapter<T2IInput, AssetOutput>(
     rest,
     () => ({ images: 1 }),
-    async (input, ctx) => {
-      const refNote = input.characterRefs?.length
-        ? `@${input.characterRefs.map((r) => r.name).join(' @')}`
-        : '';
-      const asset = await ctx.saveAsset({
-        kind: 'image',
-        data: svgPlaceholder({
-          title: input.prompt.slice(0, 48),
-          subtitle: `${meta.displayName} ${refNote}`,
-          badge: meta.id,
-          hue,
-        }),
-        contentType: 'image/svg+xml',
-        ext: 'svg',
-      });
-      return { output: { asset }, usage: { images: 1 } };
-    },
+    (input, ctx) => produceMockImage({ id: rest.id, displayName: rest.displayName, hue }, input, ctx),
   );
 }
 

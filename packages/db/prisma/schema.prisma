@@ -93,6 +93,8 @@ model Episode {
   complianceReport Json   @default("{}")
   /// AI 生成内容标识水印（合规默认开启，合成时烧角标）
   watermark        Boolean @default(true)
+  /// 画布工作台节点坐标（{nodeId: {x, y}}），前端拖拽后防抖保存
+  canvasLayout Json?
   scenes       Scene[]
 }
 
@@ -103,6 +105,10 @@ model Scene {
   index     Int
   title     String
   location  String  @default("")
+  /// 场景参考图（空镜/环境图）：同场景镜头生成关键帧/视频时自动注入
+  refAssetId      String?
+  /// 场景一致性话术（仿 Character.consistencyNote）
+  consistencyNote String  @default("同一场景，布景、光线与色调保持一致")
   shots     Shot[]
 }
 
